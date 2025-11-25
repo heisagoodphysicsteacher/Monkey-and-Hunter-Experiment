@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <title>Monkey & Hunter Experiment</title>
+  <script src="https://cdn.tailwindcss.com"></script>
+  <style>
+    canvas { display: block; background: #e6f7ff; }
+
+    /* Data panel placed at left-middle */
+    #dataPanel {
+      position: absolute;
+      left: 20px;
+      top: 50%;
+      transform: translateY(-50%);
+      width: 240px;
+    }
+  </style>
+</head>
+
+<body class="bg-gray-100 p-6">
+
+  <h1 class="text-2xl font-bold text-center mb-4">
+    Monkey & Hunter Experiment (Auto Aim)
+  </h1>
+
+  <div class="flex gap-6">
+
+    <!-- LEFT SIDE = CANVAS + DATA PANEL -->
+    <div class="relative">
+
+      <!-- Middle-left data panel -->
+      <div id="dataPanel" class="bg-white p-4 rounded shadow text-sm">
+        <div><strong>Flight time:</strong> <span id="timeOut">0.00</span> s</div>
+        <div><strong>Range:</strong> <span id="rangeOut">0.00</span> m</div>
+        <div><strong>Max height:</strong> <span id="hmaxOut">0.00</span> m</div>
+        <div><strong>Monkey drop:</strong> <span id="dropOut">0.00</span> m</div>
+        <div><strong>Bullet (x,y):</strong> <span id="bulletPos">—</span></div>
+        <div><strong>Monkey (x,y):</strong> <span id="monkeyPos">—</span></div>
+        <div><strong>Hit?</strong> <span id="hitOut">—</span></div>
+      </div>
+
+      <!-- Canvas -->
+      <canvas id="scene" width="900" height="520"
+              class="rounded border shadow ml-64"></canvas>
+
+    </div>
+
+    <!-- RIGHT SIDE = ALL CONTROLS -->
+    <div class="w-72 bg-white p-5 rounded shadow h-fit">
+
+      <label class="block mb-6">
+        <span class="font-semibold">Bullet speed (m/s)</span>
+        <input id="speed" type="range" min="5" max="150" value="60" class="w-full">
+        <div class="text-right"><span id="speedVal">60</span> m/s</div>
+      </label>
+
+      <label class="block mb-6">
+        <span class="font-semibold">Monkey height (m)</span>
+        <input id="monkeyH" type="range" min="2" max="92" value="48" class="w-full">
+        <div class="text-right"><span id="monkeyHVal">18</span> m</div>
+      </label>
+
+      <div class="flex gap-3">
+        <button id="fireBtn"
+                class="flex-1 bg-red-600 text-white py-2 rounded font-semibold">
+          Fire
+        </button>
+        <button id="resetBtn"
+                class="flex-1 bg-gray-300 py-2 rounded">
+          Reset
+        </button>
+      </div>
+
+    </div>
+
+  </div>
+
+  <!-- SCRIPT (unchanged function, only UI moved) -->
+  <script>
+    const canvas = document.getElementById('scene');
+    const ctx = canvas.getContext('2d');
+
+    const speed = document.getElementById('speed');
+    const monkeyH = document.getElementById('monkeyH');
+
+    const speedVal = document.getElementById('speedVal');
+    const monkeyHVal = document.getElementById('monkeyHVal');
+
+    const timeOut = document.getElementById('timeOut');
+    const rangeOut = document.getElementById('rangeOut');
+    const hmaxOut = document.getElementById('hmaxOut');
+    const dropOut = document.getElementById('dropOut');
+    const bulletPos = document.getElementById('bulletPos');
+    const monkeyPos = document.getElementById('monkeyPos');
+    const hitOut = document.getElementById('hitOut');
+
+    const fireBtn = document.getElementById('fireBtn');
+    const resetBtn = document.getElementById('resetBtn');
+
+    const g = 9.8;
+    const scale = 5;
+    const groundY = () => canvas.height - 10;
+
+    const monkeyX = 135;
+    let trajectory = [];
+    let running = false;
+    let animationId = null;
+
+    let monkeyImg = new Image();
+    monkeyImg.src = "/mnt/data/IMG_7844.jpeg";
+    let monkeyLoaded = false;
+    monkeyImg.onload = () => monkeyLoaded = true;
+
+    function mToPx(m) { return m * scale; }
+
+    function updateUI() {
+      speedVal.textContent = speed.value;
+      monkeyHVal.textContent = monkeyH.value;
+    }
+    speed.oninput = monkeyH.oninput = updateUI;
+    updateUI();
+
+    function drawStatic(monkeyYM) {
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      ctx.fillStyle = "#6b8e23";
+      ctx.fillRect(0, groundY(), canvas.width, canvas.height);
+
+      const hx = 60;
+      const hy = canvas.height / 2;
+      const mx = 50 + mToPx(monkeyX);
+      const my = groundY() - mToPx(monkeyYM);
+
+      const angle = Math.atan2((hy - my), (mx - hx));
+
+      ctx.fillStyle = "#333";
+      ctx.fillRect(hx - 5, hy - 10, 10, 10);
+      ctx.strokeStyle = "#111";
+      ctx.lineWidth = 6;
+      ctx.beginPath();
+      ctx.moveTo(hx, hy - 5);
+      ctx.lineTo(hx + Math.cos(angle) * 40, hy - 5 - Math.sin(angle) * 40);
+      ctx.stroke();
+
+      if (monkeyLoaded) {
+        ctx.drawImage(monkeyImg, mx - 15, my - 15, 30, 30);
+      } else {
+        ctx.fillStyle = "#b5651d";
+        ctx.beginPath();
+        ctx.arc(mx, my, 18, 0, Math.PI * 2);
+        ctx.fill();
+      }
+    }
+
+    function resetScene() {
+      running = false;
+      trajectory = [];
+      hitOut.textContent = '—';
+      bulletPos.textContent = '—';
+      monkeyPos.textContent = '—';
+      dropOut.textContent = '0.00';
+      drawStatic(Number(monkeyH.value));
+    }
+
+    function fire() {
+      if (running) return;
+      running = true;
+      trajectory = [];
+
+      const v0 = Number(speed.value);
+      const monkeyYM0 = Number(monkeyH.value);
+
+      const hx = 60;
+      const hy =  canvas.height / 2;
+      const mx = 50 + mToPx(monkeyX);
+      const my0 = groundY() - mToPx(monkeyYM0);
+
+      const angle = Math.atan2((hy - my0), (mx - hx));
+      const vx = v0 * Math.cos(angle);
+      const vy = v0 * Math.sin(angle);
+
+      let t = 0;
+      const dt = 0.016;
+
+      function step() {
+        t += dt;
+
+        const bx_m = vx * t;
+        const by_m = vy * t - 0.5 * g * t * t;
+        const bx_px = hx + mToPx(bx_m);
+        const by_px = hy - mToPx(by_m);
+
+        const monkeyYM = Math.max(monkeyYM0 - 0.5 * g * t * t, 0);
+        const my_px = groundY() - mToPx(monkeyYM);
+
+        drawStatic(monkeyYM);
+
+        ctx.fillStyle = "#000";
+        ctx.beginPath();
+        ctx.arc(bx_px, by_px, 6, 0, Math.PI * 2);
+        ctx.fill();
+
+        if (monkeyLoaded)
+          ctx.drawImage(monkeyImg, mx - 15, my_px - 15, 30, 30);
+
+        const dist = Math.hypot(bx_px - mx, by_px - my_px);
+
+        bulletPos.textContent = bx_m.toFixed(2) + ", " + Math.max(by_m,0).toFixed(2);
+        monkeyPos.textContent = monkeyX.toFixed(2) + ", " + monkeyYM.toFixed(2);
+        dropOut.textContent = (monkeyYM0 - monkeyYM).toFixed(2);
+
+        if (dist < 20) {
+          hitOut.textContent = "YES";
+          timeOut.textContent = t.toFixed(2);
+          running = false;
+          cancelAnimationFrame(animationId);
+          return;
+        }
+
+        if (by_px > groundY() || monkeyYM === 0) {
+          hitOut.textContent = "NO";
+          timeOut.textContent = t.toFixed(2);
+          running = false;
+          cancelAnimationFrame(animationId);
+          return;
+        }
+
+        animationId = requestAnimationFrame(step);
+      }
+
+      animationId = requestAnimationFrame(step);
+    }
+
+    fireBtn.onclick = () => { resetScene(); fire(); };
+    resetBtn.onclick = resetScene;
+
+    resetScene();
+  </script>
+</body>
+</html>
+
